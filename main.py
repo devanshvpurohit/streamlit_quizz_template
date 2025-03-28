@@ -1,85 +1,101 @@
 import streamlit as st
-import sqlite3
 import json
-import socket
-from datetime import datetime
-from streamlit_extras.authenticator import login
 
-# Set up the database
-conn = sqlite3.connect('quiz_app.db', check_same_thread=False)
-c = conn.cursor()
+def run():
+    st.set_page_config(
+        page_title="Streamlit quizz app",
+        page_icon="❓",
+    )
 
-# Create tables
-c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS questions (id INTEGER PRIMARY KEY, question TEXT, options TEXT, answer TEXT, info TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, user TEXT, ip TEXT, score INTEGER, timestamp TEXT)''')
-conn.commit()
+if __name__ == "__main__":
+    run()
 
-# Function to get user IP
-def get_ip():
-    try:
-        return socket.gethostbyname(socket.gethostname())
-    except:
-        return "Unknown"
+# Custom CSS for the buttons
+st.markdown("""
+<style>
+div.stButton > button:first-child {
+    display: block;
+    margin: 0 auto;
+</style>
+""", unsafe_allow_html=True)
 
-# Authentication system using Streamlit login
-user = login(fields=["username", "password"], title="Login", form_key="login_form")
-if user:
-    st.session_state['user'] = user
-    st.sidebar.success(f"Logged in as {user['username']}")
+# Initialize session variables if they do not exist
+default_values = {'current_index': 0, 'current_question': 0, 'score': 0, 'selected_option': None, 'answer_submitted': False}
+for key, value in default_values.items():
+    st.session_state.setdefault(key, value)
 
-# Show leaderboard
-def show_leaderboard():
-    st.subheader("Leaderboard")
-    c.execute("SELECT user, MAX(score) FROM attempts GROUP BY user ORDER BY MAX(score) DESC")
-    data = c.fetchall()
-    for rank, (user, score) in enumerate(data, 1):
-        st.write(f"{rank}. {user} - {score} points")
+# Load quiz data
+with open('content/quiz_data.json', 'r', encoding='utf-8') as f:
+    quiz_data = json.load(f)
 
-# Admin Panel
-def admin_panel():
-    st.title("Admin Panel")
-    show_leaderboard()
-    if st.button("Add Question"):
-        q = st.text_input("Question")
-        options = st.text_area("Options (comma-separated)")
-        answer = st.text_input("Correct Answer")
-        info = st.text_area("Additional Info")
-        if st.button("Submit Question"):
-            c.execute("INSERT INTO questions (question, options, answer, info) VALUES (?, ?, ?, ?)", (q, options, answer, info))
-            conn.commit()
-            st.success("Question Added!")
+def restart_quiz():
+    st.session_state.current_index = 0
+    st.session_state.score = 0
+    st.session_state.selected_option = None
+    st.session_state.answer_submitted = False
 
-# Student Quiz
-def student_quiz():
-    st.title("Live Quiz")
-    c.execute("SELECT * FROM questions")
-    questions = c.fetchall()
-    if 'quiz_progress' not in st.session_state:
-        st.session_state['quiz_progress'] = {'index': 0, 'score': 0}
+def submit_answer():
 
-    if st.session_state['quiz_progress']['index'] < len(questions):
-        q_id, question, options, answer, info = questions[st.session_state['quiz_progress']['index']]
-        st.subheader(f"Q{st.session_state['quiz_progress']['index'] + 1}: {question}")
-        options = options.split(",")
-        choice = st.radio("Select an option:", options)
-        if st.button("Submit"):
-            if choice == answer:
-                st.success("Correct!")
-                st.session_state['quiz_progress']['score'] += 10
-            else:
-                st.error("Incorrect!")
-            st.session_state['quiz_progress']['index'] += 1
+    # Check if an option has been selected
+    if st.session_state.selected_option is not None:
+        # Mark the answer as submitted
+        st.session_state.answer_submitted = True
+        # Check if the selected option is correct
+        if st.session_state.selected_option == quiz_data[st.session_state.current_index]['answer']:
+            st.session_state.score += 10
     else:
-        st.write(f"Quiz completed! Final Score: {st.session_state['quiz_progress']['score']}")
-        c.execute("INSERT INTO attempts (user, ip, score, timestamp) VALUES (?, ?, ?, ?)", (st.session_state['user']['username'], get_ip(), st.session_state['quiz_progress']['score'], str(datetime.now())))
-        conn.commit()
-        st.session_state['quiz_progress'] = {'index': 0, 'score': 0}
+        # If no option selected, show a message and do not mark as submitted
+        st.warning("Please select an option before submitting.")
 
-# Main App Logic
-if 'user' in st.session_state:
-    user = st.session_state['user']
-    if user['role'] == "Admin":
-        admin_panel()
+def next_question():
+    st.session_state.current_index += 1
+    st.session_state.selected_option = None
+    st.session_state.answer_submitted = False
+
+# Title and description
+st.title("Streamlit Quiz App")
+
+# Progress bar
+progress_bar_value = (st.session_state.current_index + 1) / len(quiz_data)
+st.metric(label="Score", value=f"{st.session_state.score} / {len(quiz_data) * 10}")
+st.progress(progress_bar_value)
+
+# Display the question and answer options
+question_item = quiz_data[st.session_state.current_index]
+st.subheader(f"Question {st.session_state.current_index + 1}")
+st.title(f"{question_item['question']}")
+st.write(question_item['information'])
+
+st.markdown(""" ___""")
+
+# Answer selection
+options = question_item['options']
+correct_answer = question_item['answer']
+
+if st.session_state.answer_submitted:
+    for i, option in enumerate(options):
+        label = option
+        if option == correct_answer:
+            st.success(f"{label} (Correct answer)")
+        elif option == st.session_state.selected_option:
+            st.error(f"{label} (Incorrect answer)")
+        else:
+            st.write(label)
+else:
+    for i, option in enumerate(options):
+        if st.button(option, key=i, use_container_width=True):
+            st.session_state.selected_option = option
+
+st.markdown(""" ___""")
+
+# Submission button and response logic
+if st.session_state.answer_submitted:
+    if st.session_state.current_index < len(quiz_data) - 1:
+        st.button('Next', on_click=next_question)
     else:
-        student_quiz()
+        st.write(f"Quiz completed! Your score is: {st.session_state.score} / {len(quiz_data) * 10}")
+        if st.button('Restart', on_click=restart_quiz):
+            pass
+else:
+    if st.session_state.current_index < len(quiz_data):
+        st.button('Submit', on_click=submit_answer)
